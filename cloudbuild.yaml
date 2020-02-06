@@ -1,0 +1,59 @@
+steps:
+# Decrypt the dns creditentials for the next step
+- name: gcr.io/cloud-builders/gcloud
+  args: ['kms', 'decrypt',
+    '--ciphertext-file', 'admin/secrets.json.encrypted',
+    '--plaintext-file', 'letsencrypt/dns.json',
+    '--location', 'global',
+    '--keyring', 'letsencrypt',
+    '--key', 'dns-admin'
+  ]
+# Generate the cert with Let's Encrypt certbot
+# Needs to run in a shell for the secret env vars
+- name: 'gcr.io/cloud-builders/docker'
+  entrypoint: 'bash'
+  secretEnv: ['CERT_NAME', 'DOMAINS', 'CERT_EMAIL']
+  args: ['-c', 'docker run --rm -i --name certbot 
+    `# Makes the certbot working directory available`
+    -v /workspace/var:/var/lib/letsencrypt 
+    `# For retrieving the cert`
+    -v /workspace/letsencrypt:/etc/letsencrypt 
+    `# For retrieving logs if needed`
+    -v /workspace/logs:/var/log/letsencrypt 
+    certbot/dns-google certonly 
+      --non-interactive 
+      --agree-tos 
+      --dns-google 
+      --dns-google-credentials /etc/letsencrypt/dns.json 
+      `# TTL is 60s so give 10s more before checking`
+      --dns-google-propagation-seconds 70 
+      `# Live server`
+      --server https://acme-v02.api.letsencrypt.org/directory
+      `# Testing server`
+      `--server https://acme-staging-v02.api.letsencrypt.org/directory`
+      --email $$CERT_EMAIL 
+      --cert-name $$CERT_NAME 
+      --domains $$DOMAINS 
+      --rsa-key-size 4096'
+  ]
+# Copy the cert into the bucket for use elsewhere
+# Needs to run in a shell for the secret env vars
+- name: 'gcr.io/cloud-builders/gsutil'
+  entrypoint: 'bash'
+  secretEnv: ['CERT_BUCKET']
+  args: ['-c', 'gsutil -m 
+    `# Set cache headers`
+    -h "Cache-Control:private, max-age=0, no-transform"
+    `# Make public`
+    cp -a public-read
+    `# Recursively for all .pem files`
+    -r /workspace/letsencrypt/live/**/*.pem
+    gs://$$CERT_BUCKET'
+  ]
+secrets:
+- kmsKeyName: projects/local-uiproxy/locations/global/keyRings/letsencrypt/cryptoKeys/env-vars
+  secretEnv:
+    CERT_BUCKET: CiQANlZE0whX74WU+BbynWCGeBE0tSYi56JR/Z3rOgVpFEh1kmQSUgCIm+A6QGQlRQFc5zqOoQUYy7U/702Qc4jTj5WD3UuJ1v+WTEfvERPHp7v+5itzw48WX2nh2kxqgO21UMITpBBZQSQ32PfIHl/ejE0Oy2Jeq2M=
+    CERT_EMAIL: CiQANlZE0/BIxClphIsZCRGeMXX7+nL+lAxtuaqqa+iepHStklESOwCIm+A6TiltBGNEUmYzI/tMTarGj5OFZJCLjZ6a1FoDrgkIsB0nuvWXGc8awGqOljRyeO9xtAdF+x4n
+    CERT_NAME: CiQANlZE09az6P+5tD3qHt9UWhjcz9VYHLJVXTNpMCQ/N2PVL94SOwCIm+A6ZAGRQqZgpzng9d5mljAyTfjTXCzVwACsLjN4N0emzXuZrJkzZVS1WpOR/yC/cVNE80xUPvOF
+    DOMAINS: CiQANlZE05AmcIJwfdcdWdfzp6rsnKMLefA2M5BUiPEKXtkigaMSTwCIm+A6qpIFM/SbJdGQkEoySNqFzhuy5iJ4w29fjQP0UgONRViCT1h0dtpw+y8wlM8Dl3gLCI2vvE4PDMzoAufej4pZ/GCl83i/ZcS9nLc=
